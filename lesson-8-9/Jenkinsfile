@@ -1,0 +1,167 @@
+pipeline {
+  agent {
+    kubernetes {
+      defaultContainer 'git'
+
+      yaml '''
+apiVersion: v1
+kind: Pod
+spec:
+  serviceAccountName: jenkins-sa
+  restartPolicy: Never
+
+  containers:
+    - name: git
+      image: alpine/git:2.47.2
+      command:
+        - cat
+      tty: true
+
+    - name: kaniko
+      image: gcr.io/kaniko-project/executor:v1.23.2-debug
+      command:
+        - /busybox/cat
+      tty: true
+      env:
+        - name: AWS_REGION
+          value: us-west-2
+        - name: AWS_DEFAULT_REGION
+          value: us-west-2
+        - name: AWS_SDK_LOAD_CONFIG
+          value: "true"
+        - name: AWS_EC2_METADATA_DISABLED
+          value: "true"
+'''
+    }
+  }
+
+  options {
+    skipDefaultCheckout(true)
+    timestamps()
+  }
+
+  environment {
+    ECR_REPOSITORY    = '732231074090.dkr.ecr.us-west-2.amazonaws.com/lesson-7-ecr'
+    GITOPS_REPOSITORY = 'https://github.com/andrii248/django-app-gitops.git'
+  }
+
+  stages {
+    stage('Checkout') {
+      steps {
+        container('git') {
+          checkout scm
+
+          script {
+            def shortCommit = sh(
+              script: 'git rev-parse --short HEAD',
+              returnStdout: true
+            ).trim()
+
+            env.IMAGE_TAG = "${env.BUILD_NUMBER}-${shortCommit}"
+          }
+
+          sh '''
+            echo "Commit: $(git rev-parse --short HEAD)"
+            echo "Image: ${ECR_REPOSITORY}:${IMAGE_TAG}"
+            test -f Dockerfile
+            test -f app/requirements.txt
+          '''
+        }
+      }
+    }
+
+    stage('Build and Push Image') {
+      steps {
+        container('kaniko') {
+          sh '''
+            set -eu
+
+            mkdir -p /kaniko/.docker
+
+            printf '%s\n' \
+              '{"credsStore":"ecr-login"}' \
+              > /kaniko/.docker/config.json
+
+            /kaniko/executor \
+              --context "${WORKSPACE}" \
+              --dockerfile "${WORKSPACE}/Dockerfile" \
+              --destination "${ECR_REPOSITORY}:${IMAGE_TAG}" \
+              --verbosity info
+          '''
+        }
+      }
+    }
+
+    stage('Update GitOps Repository') {
+      steps {
+        container('git') {
+          withCredentials([
+            usernamePassword(
+              credentialsId: 'github-token',
+              usernameVariable: 'GITHUB_USER',
+              passwordVariable: 'GITHUB_TOKEN'
+            )
+          ]) {
+            sh '''
+              set +x
+              set -eu
+
+              rm -rf gitops .git-askpass
+
+              cat > .git-askpass <<'SCRIPT'
+#!/bin/sh
+case "$1" in
+  *Username*) printf '%s\n' "$GITHUB_USER" ;;
+  *Password*) printf '%s\n' "$GITHUB_TOKEN" ;;
+esac
+SCRIPT
+
+              chmod 700 .git-askpass
+              export GIT_ASKPASS="${WORKSPACE}/.git-askpass"
+              export GIT_TERMINAL_PROMPT=0
+
+              git clone "${GITOPS_REPOSITORY}" gitops
+              cd gitops
+
+              git config user.name "Jenkins"
+              git config user.email "jenkins@local"
+
+              sed -i \
+                "/^image:/,/^[^ ]/ s|^  repository:.*|  repository: ${ECR_REPOSITORY}|" \
+                charts/django-app/values.yaml
+
+              sed -i \
+                "/^image:/,/^[^ ]/ s|^  tag:.*|  tag: \\"${IMAGE_TAG}\\"|" \
+                charts/django-app/values.yaml
+
+              git add charts/django-app/values.yaml
+
+              if git diff --cached --quiet; then
+                echo "No GitOps change was required."
+              else
+                git commit -m "Deploy image ${IMAGE_TAG}"
+                git push origin main
+              fi
+
+              rm -f "${WORKSPACE}/.git-askpass"
+            '''
+          }
+        }
+      }
+    }
+  }
+
+  post {
+    success {
+      echo "Published ${ECR_REPOSITORY}:${IMAGE_TAG}"
+    }
+
+    failure {
+      echo 'Pipeline failed. Check the failed stage logs.'
+    }
+
+    always {
+      cleanWs()
+    }
+  }
+}
