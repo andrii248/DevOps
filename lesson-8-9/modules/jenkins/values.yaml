@@ -1,0 +1,81 @@
+controller:
+  admin:
+    createSecret: true
+    username: admin
+    userKey: jenkins-admin-user
+    passwordKey: jenkins-admin-password
+
+  serviceType: LoadBalancer
+  servicePort: 80
+
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+
+  additionalPlugins:
+    - credentials-binding
+    - github
+    - job-dsl
+
+  additionalExistingSecrets:
+    - name: jenkins-github-token
+      keyName: github-token
+
+  JCasC:
+    defaultConfig: true
+    configScripts:
+      github-credentials: |
+        credentials:
+          system:
+            domainCredentials:
+              - credentials:
+                  - usernamePassword:
+                      scope: GLOBAL
+                      id: github-token
+                      username: "${github_owner}"
+                      password: "$${jenkins-github-token-github-token}"
+                      description: "GitHub PAT from Kubernetes Secret"
+
+      pipeline-job: |
+        jobs:
+          - script: >
+              pipelineJob('django-ci-cd') {
+                description('Build Django image with Kaniko, push to ECR and update GitOps chart')
+                definition {
+                  cpsScm {
+                    scm {
+                      git {
+                        remote {
+                          url('${app_repository_url}')
+                          credentials('github-token')
+                        }
+                        branches('*/lesson-8-9')
+                      }
+                    }
+                    scriptPath('lesson-8-9/Jenkinsfile')
+                    lightweight(true)
+                  }
+                }
+              }
+
+persistence:
+  enabled: true
+  storageClass: ebs-sc
+  size: 10Gi
+
+serviceAccount:
+  create: false
+  name: jenkins-sa
+
+serviceAccountAgent:
+  create: false
+  name: jenkins-sa
+
+agent:
+  enabled: true
+  useDefaultServiceAccount: true
+  serviceAccount: jenkins-sa

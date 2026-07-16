@@ -29,3 +29,19 @@ module "eks" {
   vpc_id             = module.vpc.vpc_id
   private_subnet_ids = module.vpc.private_subnet_ids
 }
+module "jenkins" {
+  source = "./modules/jenkins"
+
+  cluster_name       = module.eks.cluster_name
+  oidc_provider_arn  = module.eks.oidc_provider_arn
+  oidc_provider_url  = module.eks.oidc_provider_url
+  ecr_repository_arn = module.ecr.repository_arn
+
+  app_repository_url = var.app_repository_url
+  github_owner       = var.github_owner
+  github_token       = var.github_token
+
+  depends_on = [
+    module.eks
+  ]
+}
