@@ -49,6 +49,7 @@ spec:
       steps {
         container('git') {
           checkout scm
+          sh 'git config --global --add safe.directory "$WORKSPACE"'
 
           script {
             def shortCommit = sh(
