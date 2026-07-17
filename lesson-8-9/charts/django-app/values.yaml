@@ -7,7 +7,7 @@ replicaCount: 1
 image:
   repository: 732231074090.dkr.ecr.us-west-2.amazonaws.com/lesson-7-ecr
   pullPolicy: Always
-  tag: "latest"
+  tag: "4-3ff4d8b"
 
 imagePullSecrets: []
 nameOverride: ""
@@ -59,7 +59,13 @@ httpRoute:
             type: PathPrefix
             value: /headers
 
-resources: {}
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
 
 # Probes
 startupProbe:

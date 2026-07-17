@@ -1,260 +1,490 @@
-# Lesson 7 - Kubernetes Deployment with Helm
+# CI/CD Pipeline with Jenkins, Kaniko, Amazon ECR, Argo CD and EKS
 
-## Project Overview
+This project implements a complete CI/CD and GitOps workflow for a Django application deployed to Amazon EKS.
 
-This project contains Terraform configuration and a Helm chart for deploying a Django application to an existing Amazon EKS cluster.
+The infrastructure is managed with Terraform. Jenkins runs inside Kubernetes and uses Kaniko to build the application image without requiring Docker-in-Docker. The image is pushed to Amazon ECR, after which Jenkins updates the image tag in a separate GitOps repository. Argo CD detects the Git change and automatically deploys the new version to EKS.
 
-The deployment and infrastructure include:
-
-- Amazon ECR repository for storing the Docker image;
-- VPC, subnets, NAT gateway, and networking configured via Terraform modules;
-- Amazon EKS cluster and node group managed with Terraform;
-- a Helm chart for deploying the Django app into the lesson-7 namespace;
-- a Kubernetes Service exposing the app inside the cluster on port 80 and forwarding to container port 8000;
-- liveness, readiness, and startup probes for application health checks;
-- updated Django settings for running the app successfully in Kubernetes.
-
-## Project Structure
+## Architecture
 
 ```text
-lesson-7/
-│
-├── backend.tf
-├── main.tf
-├── outputs.tf
-├── providers.tf
-├── README.md
-│
-├── .terraform/
-├── modules/
-│   ├── ecr/
-│   │   ├── ecr.tf
-│   │   ├── variables.tf
-│   │   └── outputs.tf
-│   ├── eks/
-│   │   ├── eks.tf
-│   │   ├── variables.tf
-│   │   └── outputs.tf
-│   ├── s3-backend/
-│   │   ├── s3.tf
-│   │   ├── dynamodb.tf
-│   │   ├── variables.tf
-│   │   └── outputs.tf
-│   └── vpc/
-│       ├── vpc.tf
-│       ├── routes.tf
-│       ├── variables.tf
-│       └── outputs.tf
-│
-└── charts/
-    └── django-app/
-        ├── Chart.yaml
-        ├── values.yaml
-        └── templates/
-            ├── deployment.yaml
-            ├── service.yaml
-            ├── serviceaccount.yaml
-            ├── configmap.yaml
-            ├── ingress.yaml
-            ├── hpa.yaml
-            ├── httproute.yaml
-            ├── _helpers.tpl
-            └── tests/
-                └── test-connection.yaml
+Developer
+    |
+    | git push
+    v
+GitHub DevOps repository
+    |
+    v
+Jenkins on EKS
+    |
+    | Kaniko build
+    v
+Amazon ECR
+    |
+    | update image.tag
+    v
+GitHub GitOps repository
+    |
+    | automated synchronization
+    v
+Argo CD
+    |
+    v
+Django application on Amazon EKS
 ```
 
-## Terraform Infrastructure
+## Repositories
 
-### Root Configuration
+### Application and infrastructure repository
 
-The root Terraform files (`backend.tf`, `providers.tf`, `main.tf`, and `outputs.tf`) configure remote state, the AWS provider, and wiring for the child modules.
+Repository:
 
-The configuration provisions or connects to:
+```text
+https://github.com/andrii248/DevOps
+```
 
-- a VPC with public and private subnets and routing for EKS;
-- an ECR repository for the Django image;
-- an EKS cluster and managed node group for running pods;
-- an S3 bucket and DynamoDB table for remote Terraform state and state locking.
+Branch:
 
-`terraform validate` and `terraform plan` run successfully and currently show **no changes**, meaning the real AWS infrastructure matches the configuration.
+```text
+lesson-8-9
+```
 
-### Terraform Commands
+The repository contains:
 
-From the `lesson-7` directory:
+- Django application source code
+- Dockerfile
+- Jenkinsfile
+- Terraform infrastructure
+- Jenkins Terraform module
+- Argo CD Terraform module
+- EKS, ECR and VPC modules
+- EBS CSI configuration
+- Metrics Server configuration
+
+### GitOps repository
+
+Repository:
+
+```text
+https://github.com/andrii248/django-app-gitops
+```
+
+The GitOps repository contains the Helm chart used by Argo CD.
+
+Jenkins automatically changes:
+
+```yaml
+image:
+  repository: 732231074090.dkr.ecr.us-west-2.amazonaws.com/lesson-7-ecr
+  tag: "<jenkins-build-number>-<git-commit>"
+```
+
+Argo CD watches the `main` branch and deploys every new image tag.
+
+## AWS Resources
+
+| Resource                     | Value          |
+| ---------------------------- | -------------- |
+| AWS region                   | `us-west-2`    |
+| EKS cluster                  | `lesson-7-eks` |
+| ECR repository               | `lesson-7-ecr` |
+| Jenkins namespace            | `jenkins`      |
+| Argo CD namespace            | `argocd`       |
+| Application namespace        | `django-app`   |
+| Jenkins storage class        | `ebs-sc`       |
+| Jenkins persistent volume    | `10Gi`         |
+| Application minimum replicas | `2`            |
+| Application maximum replicas | `6`            |
+| HPA CPU target               | `70%`          |
+
+## Infrastructure Components
+
+### Amazon EKS
+
+The application, Jenkins and Argo CD run inside the existing EKS cluster.
+
+The worker nodes have permission to pull container images from Amazon ECR.
+
+### Amazon ECR
+
+Kaniko pushes versioned Django images to:
+
+```text
+732231074090.dkr.ecr.us-west-2.amazonaws.com/lesson-7-ecr
+```
+
+An example generated image tag is:
+
+```text
+4-3ff4d8b
+```
+
+The tag consists of:
+
+```text
+Jenkins build number + short Git commit SHA
+```
+
+### Jenkins
+
+Jenkins is installed through the official Helm chart and managed by Terraform.
+
+Jenkins uses:
+
+- Configuration as Code
+- Job DSL
+- Kubernetes agents
+- Persistent EBS storage
+- Kubernetes service account
+- IAM Roles for Service Accounts
+- GitHub credentials stored in a Kubernetes Secret
+
+The pipeline job is created automatically:
+
+```text
+django-ci-cd
+```
+
+### Kaniko
+
+Kaniko runs inside an ephemeral Kubernetes agent pod.
+
+It builds the application using:
+
+```text
+Dockerfile: Dockerfile
+Build context: repository root
+```
+
+Kaniko authenticates to ECR using the Jenkins Kubernetes service account and AWS IRSA. No static AWS access keys are stored in the repository.
+
+### Argo CD
+
+Argo CD is installed through Terraform and Helm.
+
+The Argo CD Application watches:
+
+```text
+Repository: https://github.com/andrii248/django-app-gitops.git
+Branch: main
+Path: charts/django-app
+```
+
+Automated synchronization is enabled:
+
+```yaml
+syncPolicy:
+  automated:
+    prune: true
+    selfHeal: true
+  syncOptions:
+    - CreateNamespace=true
+```
+
+This means that Argo CD:
+
+- deploys new GitOps commits automatically;
+- removes resources deleted from Git;
+- restores resources changed manually in Kubernetes;
+- creates the application namespace automatically.
+
+### EBS CSI Driver
+
+The Amazon EBS CSI Driver is installed as an EKS add-on.
+
+It provides persistent EBS storage for Jenkins through the `ebs-sc` storage class.
+
+### Metrics Server and HPA
+
+Metrics Server provides CPU and memory metrics for Kubernetes.
+
+The Django application uses a Horizontal Pod Autoscaler:
+
+```text
+Minimum replicas: 2
+Maximum replicas: 6
+Target CPU utilization: 70%
+```
+
+The HPA was verified successfully and reports live CPU utilization.
+
+## Jenkins Pipeline
+
+The `Jenkinsfile` contains three main stages.
+
+### 1. Checkout
+
+Jenkins checks out the `lesson-8-9` branch and creates an image tag from the build number and Git commit:
+
+```text
+BUILD_NUMBER-SHORT_COMMIT
+```
+
+Example:
+
+```text
+4-3ff4d8b
+```
+
+### 2. Build and Push Image
+
+Kaniko builds the Django image and pushes it to Amazon ECR:
+
+```text
+732231074090.dkr.ecr.us-west-2.amazonaws.com/lesson-7-ecr:<IMAGE_TAG>
+```
+
+### 3. Update GitOps Repository
+
+Jenkins clones the GitOps repository and updates:
+
+```yaml
+image.repository
+image.tag
+```
+
+It then commits and pushes the change to the `main` branch.
+
+Argo CD detects this commit and automatically deploys the new image.
+
+## Application Helm Chart
+
+The Helm chart contains:
+
+- Deployment
+- Service
+- ServiceAccount
+- ConfigMap
+- HorizontalPodAutoscaler
+- Startup probe
+- Readiness probe
+- Liveness probe
+- CPU and memory requests
+- CPU and memory limits
+
+Application resources:
+
+```yaml
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+```
+
+## Deployment
+
+### Terraform variables
+
+The following environment variables are required:
+
+```bash
+export TF_VAR_app_repository_url="https://github.com/andrii248/DevOps.git"
+export TF_VAR_github_owner="andrii248"
+
+read -rsp "GitHub PAT: " TF_VAR_github_token
+echo
+export TF_VAR_github_token
+```
+
+The GitHub token is not committed to Git.
+
+### Initialize and validate Terraform
 
 ```bash
 terraform init
+terraform fmt -recursive
 terraform validate
 terraform plan
 ```
 
-- `terraform init` initializes the backend and downloads providers and modules.
-- `terraform validate` checks the configuration for syntax and internal consistency.
-- `terraform plan` compares the current AWS infrastructure with the configuration and shows planned changes (currently “No changes”).
-
-## Docker Image and ECR
-
-The Django application image is built locally and pushed to Amazon ECR.
-
-### Build Docker Image
+### Apply infrastructure
 
 ```bash
-docker build -t lesson-7-ecr:latest .
+terraform apply
 ```
 
-### Tag Docker Image for ECR
+### Start the Jenkins pipeline
 
-```bash
-docker tag lesson-7-ecr:latest 732231074090.dkr.ecr.us-west-2.amazonaws.com/lesson-7-ecr:latest
-```
-
-### Push Docker Image to ECR
-
-```bash
-docker push 732231074090.dkr.ecr.us-west-2.amazonaws.com/lesson-7-ecr:latest
-```
-
-The Helm chart references this image in `values.yaml` so that the Deployment pulls it when creating pods.
-
-## Helm Chart
-
-The `django-app` Helm chart deploys the Django container into the `lesson-7` namespace of the existing EKS cluster.
-
-### Chart Contents
-
-The chart defines:
-
-- a Deployment for the Django application using the ECR image and container port 8000;
-- a Service of type ClusterIP that exposes port 80 and forwards traffic to the pod’s HTTP port;
-- a ServiceAccount for the pod;
-- optional ConfigMap, Ingress, HTTPRoute, and HPA manifests;
-- a `tests/test-connection.yaml` pod used by `helm test` to verify connectivity.
-
-`helm lint` passes with no errors, confirming the chart is well-formed.
-
-### Probes and Container Ports
-
-The Deployment template configures:
-
-- `containerPort: 8000` with the port name `http` for the Django process;
-- `startupProbe` to give the app time to start before health checks begin;
-- `readinessProbe` to indicate when the app is ready to serve traffic;
-- `livenessProbe` to detect and restart unhealthy containers.
-
-The Service listens on port 80 and uses `targetPort: http`, which maps to the container’s port 8000.
-
-### Helm Values
-
-Key values in `values.yaml` include:
-
-- `image.repository: 732231074090.dkr.ecr.us-west-2.amazonaws.com/lesson-7-ecr`;
-- `image.tag: "latest"`;
-- `image.pullPolicy: Always` to ensure the most recent image is fetched;
-- `containerPort: 8000` for the Django app;
-- `service.port: 80` and `service.targetPort: 8000` for HTTP routing;
-- probe thresholds and timings for startup, readiness, and liveness.
-
-### Helm Commands
-
-From `lesson-7/charts/django-app`:
-
-```bash
-helm lint .
-helm template django-app .
-```
-
-From the repository root (or `lesson-7`), using the chart path:
-
-```bash
-helm upgrade --install lesson-7 ./lesson-7/charts/django-app -n lesson-7
-```
-
-- `helm lint` validates chart structure and templates.
-- `helm template` renders the full Kubernetes manifests for inspection.
-- `helm upgrade --install` installs the release if it does not exist or upgrades it if it already exists.
-
-After installation, tests can be run with:
-
-```bash
-helm test lesson-7 -n lesson-7
-```
-
-## Application Configuration
-
-The Django configuration was adjusted to work reliably inside Kubernetes.
-
-### Database Settings
-
-Originally the app expected a PostgreSQL service named `db`, which did not exist in the EKS cluster. To avoid connection failures during startup, the database configuration was changed to use SQLite:
-
-```python
-DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.sqlite3",
-        "NAME": BASE_DIR / "db.sqlite3",
-    }
-}
-```
-
-This allows the container to start successfully without external database dependencies.
-
-### Allowed Hosts
-
-For testing in Kubernetes, the `ALLOWED_HOSTS` setting was relaxed:
-
-```python
-ALLOWED_HOSTS = ["*"]
-```
-
-This prevents Django from rejecting requests based on the Host header while services and ingress are being verified.
-
-## Kubernetes Access and Debugging
-
-### Check Resources
-
-```bash
-kubectl get pods -n lesson-7
-kubectl get deployments -n lesson-7
-kubectl get svc -n lesson-7
-```
-
-### Describe and Logs
-
-```bash
-kubectl describe pod -n lesson-7 <pod-name>
-kubectl logs -n lesson-7 <pod-name>
-kubectl logs -n lesson-7 <pod-name> --previous
-```
-
-These commands are used to inspect probe behavior, image versions, and container restarts.
-
-### Port Forwarding
-
-To access the application locally from a browser:
-
-```bash
-kubectl port-forward -n lesson-7 service/django-app-chart 8080:80
-```
-
-Then open:
+Open Jenkins and run:
 
 ```text
-http://127.0.0.1:8080
+django-ci-cd → Build Now
 ```
 
-The Service forwards HTTP traffic on port 80 to the Django container on port 8000.
+The successful pipeline:
 
-## Final Result
+1. checks out the source code;
+2. builds the image with Kaniko;
+3. pushes the image to ECR;
+4. updates the GitOps repository;
+5. triggers the Argo CD deployment.
 
-With the corrected ports, probes, image settings, and Django configuration:
+## Verification
 
-- Terraform reports no pending changes and the EKS infrastructure is in sync with the configuration;
-- `helm lint` and `helm template` succeed for the `django-app` chart;
-- the Helm deployment rolls out successfully and pods reach the Ready state;
-- the Service routes traffic correctly to the Django container;
-- the application can be opened in the browser via port forwarding.
+### Jenkins
 
-## Notes
+```bash
+kubectl get pods,pvc,svc -n jenkins
+helm status jenkins -n jenkins
+```
 
-- When using the `latest` tag for images, combining it with `image.pullPolicy: Always` helps avoid stale cached images during deployments.
-- For production environments, it is recommended to switch from SQLite back to PostgreSQL or another managed database service and to tighten `ALLOWED_HOSTS`.
+Expected result:
+
+```text
+jenkins-0   2/2   Running
+PVC         Bound
+Helm        deployed
+```
+
+### Argo CD
+
+```bash
+kubectl get pods -n argocd
+kubectl get applications -n argocd
+```
+
+Expected result:
+
+```text
+django-app   Synced   Healthy
+```
+
+### Django application
+
+```bash
+kubectl get all -n django-app
+```
+
+Expected result:
+
+- two running Django pods;
+- one available deployment;
+- LoadBalancer service;
+- configured HPA.
+
+### HPA and Metrics Server
+
+```bash
+kubectl top nodes
+kubectl top pods -n django-app
+kubectl get hpa -n django-app
+```
+
+Verified result:
+
+```text
+cpu: 6%/70%
+MINPODS: 2
+MAXPODS: 6
+REPLICAS: 2
+```
+
+### Application endpoint
+
+```bash
+APP_HOST=$(kubectl -n django-app get svc django-app-chart \
+  -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+
+curl -sS -o /dev/null \
+  -w "HTTP status: %{http_code}\n" \
+  "http://$APP_HOST"
+```
+
+Verified response:
+
+```text
+HTTP status: 200
+```
+
+### ECR image
+
+```bash
+aws ecr describe-images \
+  --repository-name lesson-7-ecr \
+  --region us-west-2 \
+  --query 'sort_by(imageDetails,&imagePushedAt)[-1].{Tags:imageTags,Pushed:imagePushedAt,Digest:imageDigest}' \
+  --output table
+```
+
+### Terraform state
+
+```bash
+terraform validate
+terraform plan
+```
+
+Expected result:
+
+```text
+Success! The configuration is valid.
+No changes. Your infrastructure matches the configuration.
+```
+
+## Security
+
+The project avoids committing sensitive credentials.
+
+Security measures include:
+
+- GitHub PAT stored in a Kubernetes Secret;
+- Jenkins credential masking;
+- AWS permissions provided through IRSA;
+- no AWS access keys stored in Jenkins or Git;
+- ECR permissions limited to the Jenkins IAM role;
+- application secrets separated from ConfigMap configuration;
+- sensitive Terraform variables marked as sensitive.
+
+The following values must never be committed:
+
+- GitHub personal access tokens;
+- AWS access keys;
+- Jenkins passwords;
+- Argo CD passwords;
+- Terraform state files;
+- saved Terraform plan files.
+
+## Current Verified Status
+
+The complete workflow has been tested successfully:
+
+```text
+GitHub
+  → Jenkins
+  → Kaniko
+  → Amazon ECR
+  → GitOps repository
+  → Argo CD
+  → Amazon EKS
+  → Horizontal Pod Autoscaler
+```
+
+Verified state:
+
+```text
+Jenkins pipeline: SUCCESS
+Argo CD sync: Synced
+Argo CD health: Healthy
+Django deployment: 2/2 available
+Django pods: Running
+Application HTTP response: 200
+HPA metrics: Available
+Terraform drift: No changes
+```
+
+## Limitations
+
+This project is intended as a learning and demonstration environment.
+
+For a production deployment, the following improvements would be recommended:
+
+- HTTPS and TLS certificates;
+- custom domain name;
+- production WSGI server such as Gunicorn;
+- managed PostgreSQL database;
+- external secret management;
+- network policies;
+- monitoring and alerting;
+- private load balancers where appropriate;
+- Jenkins and Argo CD access restrictions.
