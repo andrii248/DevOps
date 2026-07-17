@@ -160,8 +160,5 @@ SCRIPT
       echo 'Pipeline failed. Check the failed stage logs.'
     }
 
-    always {
-      deleteDir()
-    }
   }
 }
