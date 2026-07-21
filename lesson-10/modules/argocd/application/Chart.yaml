@@ -1,0 +1,5 @@
+apiVersion: v2
+name: django-app-argocd
+description: Argo CD Application for the Django GitOps repository
+type: application
+version: 0.1.0

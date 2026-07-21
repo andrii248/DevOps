@@ -1,0 +1,6 @@
+application:
+  name: django-app
+  repoURL: ""
+  targetRevision: main
+  path: charts/django-app
+  destinationNamespace: django-app

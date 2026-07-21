@@ -1,0 +1,29 @@
+# Required by the existing Jenkins module.
+app_repository_url = "https://github.com/andrii248/DevOps.git"
+github_owner       = "andrii248"
+# Never commit a real token. Prefer: export TF_VAR_github_token="..."
+github_token = "REPLACE_ME"
+
+# Standard PostgreSQL RDS instance by default.
+use_aurora          = false
+db_engine           = "postgres"
+db_engine_version   = "16.4"
+db_instance_class   = "db.t4g.medium"
+db_multi_az         = false
+db_publicly_accessible = false
+
+# AWS Secrets Manager generates the password by default.
+db_manage_master_user_password = true
+db_name                        = "django"
+db_username                    = "dbadmin"
+
+# Aurora example: uncomment or override these values.
+# use_aurora                     = true
+# db_engine_cluster              = "aurora-postgresql"
+# db_engine_version_cluster      = "16.4"
+# db_aurora_replica_count        = 1
+# db_parameter_group_family_aurora = "aurora-postgresql16"
+
+# To supply a password manually instead:
+# db_manage_master_user_password = false
+# db_password                    = "REPLACE_WITH_A_STRONG_PASSWORD"
